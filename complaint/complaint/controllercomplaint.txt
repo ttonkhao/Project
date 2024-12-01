@@ -1,0 +1,125 @@
+ public function actionComplaint()
+    { {
+            Yii::$app->db->open();
+            $model = new Complaint();
+            
+
+            if ($model->load(Yii::$app->request->post())) {
+               
+                $model->validate(); 
+                $model->pname;
+                $model->sex;
+               $model->number = $model->generateNumber();
+               
+
+                // get the instance of the uploaded file
+                $model->file = UploadedFile::getInstance($model, 'file');
+
+                if ($model->file !== null) {
+                    $imageName = $model->file->baseName;
+
+                    // ตรวจสอบหากโฟลเดอร์ไม่มีอยู่แล้วให้สร้างขึ้น
+                    if (!file_exists('uploads/images/')) {
+                        mkdir('uploads/images/', 0777, true);
+                    }
+                    $counter = 1;
+                    // ตรวจสอบการซ้ำของไฟล์
+                    while (file_exists('uploads/images/' . $imageName . '.' . $model->file->extension)) {
+                        $imageName = $model->file->baseName . '_' . $counter;
+                        $counter++;
+                    }
+                    // save the path in the db column
+                    $model->image = 'uploads/images/' .  $imageName . '.' . $model->file->extension;
+                    // save the file
+                    $model->file->saveAs($model->image);
+                } else {
+                    // กรณีไม่มีไฟล์อัพโหลด
+                    // ทำตามที่คุณต้องการ เช่น กำหนด $model->image เป็นค่าว่าง
+                    $model->image = null;
+                }
+
+
+
+                
+                if ($model->save()) {
+                    $sql = "select line_group_token from line_setting
+                        where name_group = 'ระบบรับฟังความคิดเห็นและเรื่องร้องเรียน' and status ='Y'";
+                    $line_token = Yii::$app->db->createCommand($sql)->queryScalar();
+                    $last_thread = Risklinebot::findOne(['notify' => 'รายการความคิดเห็นและเรื่องร้องเรียน']);
+                    $thread = Complaint::find()->orderBy(['complaint_id' => SORT_DESC])->one();
+                    if (!$last_thread) {
+                        $last_thread = new Risklinebot();
+                        $last_thread->notify = 'ความคิดเห็นและเรื่องร้องเรียน';
+                        $last_thread->last_id = $thread->complaint_id;
+                        $last_thread->save();
+                        $message = '  ' . 'ลำดับที่' . '  ' . $thread->complaint_id . " \n " . 'วันเวลาที่แจ้ง :' . '  ' . $thread->complaint_datetime . "\n" . 'ชื่อ-นามสกุล : ' . '  ' . $thread->pname . $thread->fname . ' ' . $thread->lname . "\n" . 'รายละเอียด : ' .  ' ' . $thread->complaint_detail . "\n" .'ความประสงค์ในการติดต่อกลับ :'. '' . $thread->status_consent. "\n" .  Url::to('http://localhost/project/complaint/frontend/web/site/complaint');
+                        $res = $this->notify_message($message);
+                    } else {
+                        if ($last_thread->last_id != $thread->complaint_id) {
+                            $message = '  ' . 'ลำดับที่' . '  ' . $thread->complaint_id . " \n " . 'วันเวลาที่แจ้ง :' . '  ' . $thread->complaint_datetime . "\n" . 'ชื่อ-นามสกุล : ' . '  ' . $thread->pname . $thread->fname . ' ' . $thread->lname . "\n" . 'รายละเอียด : ' .  ' ' . $thread->complaint_detail . "\n" . 'ความประสงค์ในการติดต่อกลับ :' . '' . $thread->status_consent . "\n" .  Url::to('http://localhost/project/complaint/frontend/web/site/complaint');
+                            $res = $this->notify_message($message);
+                            $last_thread->last_id = $thread->complaint_id;
+                            $last_thread->save();
+                        }
+                    }
+                    if ($line_token != null) {
+                        Yii::$app->session->setFlash('success', 'ขอบคุณที่ใช้บริการโรงพยาบาลวัดเพลง จังหวัดราชบุรี');
+                        // ดึงข้อมูลที่บันทึกลงไป
+                        $savedData = Complaint::findOne($model->primaryKey);
+
+                        return $this->redirect(['/complaintuserview/userview', 'complaint_id' => $savedData->complaint_id]);
+                    } else {
+                        return $this->redirect(['/site/error']);
+                    }
+/* Yii::$app->session->setFlash('success', 'ขอบคุณที่ใช้บริการโรงพยาบาลวัดเพลง จังหวัดราชบุรี');
+                    return $this->refresh();  */
+                }
+            }
+
+            return $this->render('complaint', [
+                'model' => $model,
+
+            ]);
+        }
+    }
+
+    public function notify_message($message)
+    {
+        $line_api = 'https://notify-api.line.me/api/notify';
+        //    $line_token = 'pquCOgDyoskJC7TtAMhv1I5TN9vO8rB3LHmOoSybTiJ';
+        $sql = "select line_group_token from line_setting
+                where name_group = 'ระบบรับฟังความคิดเห็นและเรื่องร้องเรียน' and status ='Y'";
+        $line_token = Yii::$app->db->createCommand($sql)->queryScalar();
+        if ($line_token != null) {
+            $queryData = array('message' => $message);
+            $queryData = http_build_query($queryData, '', '&');
+            $headerOptions = array(
+                'http' => array(
+                    'method' => 'POST',
+                    'header' => "Content-Type: application/x-www-form-urlencoded\r\n"
+                        . "Authorization: Bearer " . $line_token . "\r\n"
+                        . "Content-Length: " . strlen($queryData) . "\r\n",
+                    'content' => $queryData
+                )
+            );
+            $context = stream_context_create($headerOptions);
+            $result = file_get_contents($line_api, FALSE, $context);
+            $res = json_decode($result);
+            return $res;
+        }
+    }
+
+                    }
+                    if ($line_token != null) {
+                        Yii::$app->session->setFlash('success', 'ขอบคุณที่ใช้บริการโรงพยาบาลวัดเพลง จังหวัดราชบุรี');
+                        // ดึงข้อมูลที่บันทึกลงไป
+                        $savedData = Complaint::findOne($model->primaryKey);
+
+                        return $this->redirect(['/complaintuserview/userview', 'complaint_id' => $savedData->complaint_id]);
+                    } else {
+                        return $this->redirect(['/site/error']);
+                    }
+/* Yii::$app->session->setFlash('success', 'ขอบคุณที่ใช้บริการโรงพยาบาลวัดเพลง จังหวัดราชบุรี');
+                    return $this->refresh();  */
+                }
+            }
